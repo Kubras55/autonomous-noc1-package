@@ -1,0 +1,169 @@
+import asyncio
+import json
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+
+import httpx
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+APP_DIR = Path(__file__).resolve().parent
+TEMPLATE_PATH = APP_DIR / "templates" / "operator_console.html"
+STATIC_DIR = APP_DIR / "static"
+BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8001").rstrip("/")
+GNS3_URL = os.getenv("GNS3_URL", "http://localhost:3081").rstrip("/")
+GNS3_PROJECT = os.getenv("GNS3_PROJECT", "Autonomous-NOC-GNS3")
+ALLOWED_ACTION = "start_gns3_node_and_verify_links"
+AUDIT_PATH = Path(os.getenv("AUDIT_PATH", "logs/remediation-audit.jsonl"))
+ANALYSIS_CACHE: dict[str, dict] = {}
+
+app = FastAPI(title="Autonomous NOC Operator Console", version="0.2.0")
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+class Decision(BaseModel):
+    approved: bool
+    operator: str = "local-operator"
+    note: str = ""
+
+
+def write_audit(**event):
+    AUDIT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    record = {"timestamp": datetime.now(timezone.utc).isoformat(), **event}
+    with AUDIT_PATH.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+async def get_json(client: httpx.AsyncClient, url: str):
+    response = await client.get(url)
+    response.raise_for_status()
+    return response.json()
+
+
+async def load_context(incident_id: str, refresh_analysis: bool = False):
+    async with httpx.AsyncClient(timeout=240) as client:
+        try:
+            incident, projects = await asyncio.gather(
+                get_json(client, f"{BACKEND_URL}/incidents/{incident_id}"),
+                get_json(client, f"{GNS3_URL}/v2/projects"),
+            )
+            analysis = ANALYSIS_CACHE.get(incident_id)
+            if refresh_analysis or analysis is None:
+                analysis = await get_json(client, f"{BACKEND_URL}/incidents/{incident_id}/ai-analysis")
+                ANALYSIS_CACHE[incident_id] = analysis
+
+            project = next((item for item in projects if item["name"] == GNS3_PROJECT), None)
+            if not project:
+                raise HTTPException(404, f"GNS3 projesi bulunamadı: {GNS3_PROJECT}")
+            nodes = await get_json(client, f"{GNS3_URL}/v2/projects/{project['project_id']}/nodes")
+            node = next((item for item in nodes if item["name"] == incident["affected_service"]), None)
+            if not node:
+                raise HTTPException(404, f"GNS3 düğümü bulunamadı: {incident['affected_service']}")
+            return incident, analysis, project, node
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, f"Bağlı servise erişilemedi: {exc}") from exc
+
+
+def validate_analysis(analysis: dict):
+    if analysis.get("recommended_action") != ALLOWED_ACTION:
+        raise HTTPException(409, "Güvenlik engeli: önerilen işlem izin listesinde değil.")
+    if analysis.get("risk") == "HIGH":
+        raise HTTPException(409, "Güvenlik engeli: HIGH riskli işlem uygulanamaz.")
+
+
+@app.get("/", response_class=HTMLResponse)
+def operator_page():
+    return HTMLResponse(TEMPLATE_PATH.read_text(encoding="utf-8"))
+
+
+@app.get("/api/incidents")
+async def incidents():
+    async with httpx.AsyncClient(timeout=20) as client:
+        try:
+            return await get_json(client, f"{BACKEND_URL}/incidents")
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, f"Backend'e erişilemedi: {exc}") from exc
+
+
+@app.get("/api/incidents/{incident_id}/plan")
+async def remediation_plan(incident_id: str, refresh: bool = False):
+    incident, analysis, project, node = await load_context(incident_id, refresh_analysis=refresh)
+    allowed = analysis.get("recommended_action") == ALLOWED_ACTION and analysis.get("risk") != "HIGH"
+    return {
+        "incident": incident,
+        "analysis": analysis,
+        "allowed": allowed,
+        "project": project["name"],
+        "node": node["name"],
+        "current_status": node["status"],
+        "steps": [
+            f"Hedef GNS3 projesi: {project['name']}",
+            f"Hedef cihaz: {node['name']} (mevcut durum: {node['status']})",
+            "Cihaz durmuşsa yalnızca GNS3 Start API çağrısı yapılacak.",
+            "En fazla 20 saniye status=started sonucu doğrulanacak.",
+            "IP, VLAN, route ve router yapılandırmaları değiştirilmeyecek.",
+            "Hiçbir cihaz silinmeyecek ve diğer düğümlere dokunulmayacak.",
+        ],
+    }
+
+
+@app.post("/api/incidents/{incident_id}/decision")
+async def decide(incident_id: str, decision: Decision):
+    incident, analysis, project, node = await load_context(incident_id)
+    common = {
+        "incident_id": incident_id,
+        "operator": decision.operator.strip() or "local-operator",
+        "note": decision.note.strip(),
+        "action": analysis.get("recommended_action"),
+        "risk": analysis.get("risk"),
+        "node": node["name"],
+    }
+    if not decision.approved:
+        write_audit(**common, approved=False, outcome="rejected", executed=False)
+        return {"status": "rejected", "executed": False, "message": "Müdahale reddedildi; değişiklik yapılmadı."}
+
+    try:
+        validate_analysis(analysis)
+    except HTTPException:
+        write_audit(**common, approved=True, outcome="blocked", executed=False)
+        raise
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        try:
+            executed = node["status"] != "started"
+            if executed:
+                response = await client.post(
+                    f"{GNS3_URL}/v2/projects/{project['project_id']}/nodes/{node['node_id']}/start"
+                )
+                response.raise_for_status()
+            for _ in range(10):
+                await asyncio.sleep(2)
+                current = await get_json(
+                    client,
+                    f"{GNS3_URL}/v2/projects/{project['project_id']}/nodes/{node['node_id']}",
+                )
+                if current["status"] == "started":
+                    write_audit(**common, approved=True, outcome="completed", executed=executed)
+                    return {
+                        "status": "completed",
+                        "executed": executed,
+                        "node": node["name"],
+                        "verified_status": "started",
+                    }
+        except httpx.HTTPError as exc:
+            write_audit(**common, approved=True, outcome="failed", executed=False, error=str(exc))
+            raise HTTPException(502, f"GNS3 müdahalesi başarısız: {exc}") from exc
+
+    write_audit(**common, approved=True, outcome="verification_timeout", executed=executed)
+    raise HTTPException(504, f"Müdahale doğrulanamadı: {incident['affected_service']}")
+
+
+@app.get("/api/audit")
+def audit_events():
+    if not AUDIT_PATH.exists():
+        return []
+    lines = AUDIT_PATH.read_text(encoding="utf-8").splitlines()[-100:]
+    return [json.loads(line) for line in reversed(lines) if line.strip()]

@@ -1,0 +1,41 @@
+name: autonomous-noc
+mgmt:
+  network: noc-network
+topology:
+  nodes:
+    r1-core:
+      kind: linux
+      image: ghcr.io/hellt/network-multitool:latest
+      entrypoint: /bin/sh
+      cmd: -c "sleep infinity"
+      binds: [configs/r1-core.sh:/etc/network-config.sh:ro]
+      exec: ["sh /etc/network-config.sh"]
+    
+    r2-edge:
+      kind: linux
+      image: ghcr.io/hellt/network-multitool:latest
+      entrypoint: /bin/sh
+      cmd: -c "sleep infinity"
+      binds: [configs/r2-edge.sh:/etc/network-config.sh:ro]
+      exec: ["sh /etc/network-config.sh"]
+    r3-bng:
+      kind: linux
+      image: ghcr.io/hellt/network-multitool:latest
+      entrypoint: /bin/sh
+      cmd: -c "sleep infinity"
+      binds: [configs/r3-bng.sh:/etc/network-config.sh:ro]
+      exec: ["sh /etc/network-config.sh"]
+    sw-access:
+      kind: bridge
+    client-vlan100:
+      kind: linux
+      image: ghcr.io/hellt/network-multitool:latest
+      entrypoint: /bin/sh
+      cmd: -c "sleep infinity"
+      binds: [configs/client-vlan100.sh:/etc/network-config.sh:ro]
+      exec: ["sh /etc/network-config.sh"]
+  links:
+    - endpoints: ["r1-core:eth1", "r2-edge:eth1"]
+    - endpoints: ["r2-edge:eth2", "r3-bng:eth1"]
+    - endpoints: ["r3-bng:eth2", "sw-access:swp-bng"]
+    - endpoints: ["client-vlan100:eth1", "sw-access:swp-client"]

@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Autonomous NOC Operatör Konsolu</title>
+  <link rel="stylesheet" href="/static/operator_console.css">
+</head>
+<body>
+<main>
+  <h1>Autonomous NOC Operatör Konsolu</h1>
+  <p class="muted">Yapay zekâ önerisini inceleyin; planı görmeden müdahale onaylanamaz.</p>
+
+  <section class="card">
+    <div class="filters">
+      <label>Arama
+        <input id="incident-search" placeholder="Cihaz, VLAN veya başlık ara">
+      </label>
+      <label>Durum
+        <select id="status-filter">
+          <option value="actionable">Aktif + inceleme bekleyen</option>
+          <option value="open">Yalnızca aktif</option>
+          <option value="investigating">İnceleme bekleyen</option>
+          <option value="resolved">Çözülmüş</option>
+          <option value="all">Tümü</option>
+        </select>
+      </label>
+      <label>Önem
+        <select id="severity-filter">
+          <option value="all">Tümü</option>
+          <option value="critical">Critical</option>
+          <option value="high">High</option>
+          <option value="medium">Medium</option>
+          <option value="low">Low</option>
+        </select>
+      </label>
+    </div>
+    <label for="incident">Incident seçin</label>
+    <select id="incident"></select>
+    <div class="actions">
+      <button id="show-plan">Analizi ve Planı Göster</button>
+      <button id="refresh-analysis" class="secondary">Analizi Yenile</button>
+    </div>
+  </section>
+
+  <section class="card" id="details" hidden>
+    <div class="grid" id="facts"></div>
+    <h2>Planlanan müdahale</h2>
+    <ol id="steps"></ol>
+    <div class="actions" id="diagnostic-actions" hidden>
+      <button id="run-diagnostics" class="secondary">Canlı Teşhisi Çalıştır</button>
+    </div>
+    <section id="diagnostic-results" class="diagnostic-results" hidden>
+      <h2>Canlı teşhis sonuçları</h2>
+      <div id="diagnostic-checks"></div>
+      <p id="diagnostic-conclusion"></p>
+    </section>
+    <section class="timeline-section">
+      <h2>Olay geçmişi</h2>
+      <label for="timeline-filter">Geçmiş türü</label>
+      <select id="timeline-filter" class="compact-select">
+        <option value="all">Tüm olaylar</option>
+        <option value="alert">Alarmlar</option>
+        <option value="analysis">Yapay zekâ analizleri</option>
+        <option value="diagnostic">Teşhisler</option>
+        <option value="operator">Operatör işlemleri</option>
+        <option value="status">Durum değişiklikleri</option>
+      </select>
+      <div id="timeline" class="timeline-scroll"><p class="muted">Geçmiş yükleniyor…</p></div>
+    </section>
+    <label for="operator">Operatör adı</label>
+    <input id="operator" value="local-operator" maxlength="80">
+    <label for="note">Karar notu</label>
+    <input id="note" placeholder="Örn. Plan kontrol edildi, R2 başlatılabilir" maxlength="300">
+    <div class="actions">
+      <button class="approve" id="approve" disabled>Onayla ve Uygula</button>
+      <button class="reject" id="reject" disabled>Reddet</button>
+      <button class="investigate" id="investigate" hidden>İncelemeye Al</button>
+      <button class="resolve" id="resolve" hidden>İnceledim, Çözüldü Olarak Kapat</button>
+    </div>
+  </section>
+
+  <section class="card" id="message">Hazırlanıyor…</section>
+
+  <section class="card">
+    <h2>Son operatör kararları</h2>
+    <div class="table-wrap audit-scroll">
+      <table>
+        <thead><tr><th>Zaman</th><th>Operatör</th><th>Cihaz</th><th>Karar</th><th>Sonuç</th><th>Not</th></tr></thead>
+        <tbody id="audit-body"><tr><td colspan="6" class="muted">Henüz kayıt yok.</td></tr></tbody>
+      </table>
+    </div>
+    <div class="audit-pagination">
+      <button id="audit-prev" class="secondary" disabled>Önceki</button>
+      <span id="audit-page">Sayfa 1 / 1</span>
+      <button id="audit-next" class="secondary" disabled>Sonraki</button>
+    </div>
+  </section>
+</main>
+<script src="/static/operator_console.js?v=20260820-1" defer></script>
+</body>
+</html>

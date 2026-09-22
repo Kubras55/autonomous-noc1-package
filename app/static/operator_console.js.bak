@@ -1,0 +1,112 @@
+let currentId = null;
+
+const byId = id => document.getElementById(id);
+const esc = value => String(value ?? "").replace(/[&<>"']/g, character => ({
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+})[character]);
+
+async function request(url, options) {
+  const response = await fetch(url, options);
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.detail || "İstek başarısız");
+  return data;
+}
+
+function showMessage(text, style = "") {
+  const element = byId("message");
+  element.textContent = text;
+  element.className = `card ${style}`;
+}
+
+async function loadIncidents() {
+  try {
+    const items = await request("/api/incidents");
+    const gns3Items = items.filter(item => {
+      const source = String(item.source || "").toLowerCase();
+      const title = String(item.title || "").toLowerCase();
+      return source.includes("gns3") || title.includes("gns3");
+    });
+    byId("incident").innerHTML = gns3Items.map(item =>
+      `<option value="${esc(item.id)}">${esc(item.affected_service)} — ${esc(item.title)} — ${esc(item.status)}</option>`
+    ).join("");
+    byId("show-plan").disabled = gns3Items.length === 0;
+    byId("refresh-analysis").disabled = gns3Items.length === 0;
+    showMessage(
+      gns3Items.length ? `${gns3Items.length} GNS3 incident kaydı yüklendi.` : "Müdahaleye uygun GNS3 incident kaydı bulunamadı.",
+      gns3Items.length ? "ok" : "warn"
+    );
+  } catch (error) {
+    showMessage(error.message, "error");
+  }
+}
+
+async function showPlan(refresh = false) {
+  currentId = byId("incident").value;
+  if (!currentId) return;
+  showMessage(refresh ? "Ollama analizi yenileniyor…" : "Analiz önbelleği ve GNS3 durumu alınıyor…", "warn");
+  try {
+    const plan = await request(`/api/incidents/${currentId}/plan?refresh=${refresh}`);
+    const analysis = plan.analysis;
+    const facts = [
+      ["Servis", plan.incident.affected_service], ["Sağlayıcı", analysis.provider],
+      ["Risk", analysis.risk], ["Güven", analysis.confidence_score],
+      ["Kök neden", analysis.root_cause], ["Öneri", analysis.recommended_action],
+      ["GNS3 durumu", plan.current_status]
+    ];
+    byId("facts").innerHTML = facts.map(fact =>
+      `<div class="item"><div class="label">${esc(fact[0])}</div><div class="value">${esc(fact[1])}</div></div>`
+    ).join("");
+    byId("steps").innerHTML = plan.steps.map(step => `<li>${esc(step)}</li>`).join("");
+    byId("details").hidden = false;
+    byId("approve").disabled = !plan.allowed;
+    byId("reject").disabled = false;
+    showMessage(
+      plan.allowed ? "Plan güvenlik denetiminden geçti; karar operatörde." : "Plan güvenlik politikası tarafından engellendi.",
+      plan.allowed ? "ok" : "error"
+    );
+  } catch (error) {
+    showMessage(error.message, "error");
+  }
+}
+
+async function decide(approved) {
+  if (!currentId) return;
+  byId("approve").disabled = true;
+  byId("reject").disabled = true;
+  showMessage(approved ? "Onay uygulandı; GNS3 sonucu doğrulanıyor…" : "Müdahale reddediliyor…", "warn");
+  try {
+    const result = await request(`/api/incidents/${currentId}/decision`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        approved,
+        operator: byId("operator").value.trim() || "local-operator",
+        note: byId("note").value.trim()
+      })
+    });
+    showMessage(approved ? `${result.node} başarıyla başlatıldı ve doğrulandı.` : result.message, "ok");
+    await loadAudit();
+  } catch (error) {
+    showMessage(error.message, "error");
+  }
+}
+
+async function loadAudit() {
+  try {
+    const events = await request("/api/audit");
+    byId("audit-body").innerHTML = events.length ? events.map(event => `
+      <tr><td>${esc(new Date(event.timestamp).toLocaleString("tr-TR"))}</td><td>${esc(event.operator)}</td>
+      <td>${esc(event.node)}</td><td>${event.approved ? "Onay" : "Red"}</td>
+      <td>${esc(event.outcome)}</td><td>${esc(event.note)}</td></tr>`).join("")
+      : '<tr><td colspan="6" class="muted">Henüz kayıt yok.</td></tr>';
+  } catch (error) {
+    console.error("Audit yüklenemedi", error);
+  }
+}
+
+byId("show-plan").addEventListener("click", () => showPlan(false));
+byId("refresh-analysis").addEventListener("click", () => showPlan(true));
+byId("approve").addEventListener("click", () => decide(true));
+byId("reject").addEventListener("click", () => decide(false));
+loadIncidents();
+loadAudit();

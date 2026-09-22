@@ -1,0 +1,6 @@
+apiVersion: 1
+providers:
+  - name: Autonomous NOC
+    type: file
+    options: {path: /var/lib/grafana/dashboards}
+

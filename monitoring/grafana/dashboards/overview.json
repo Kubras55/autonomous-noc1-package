@@ -1,0 +1,14 @@
+{
+  "title": "Autonomous NOC Overview",
+  "uid": "autonomous-noc",
+  "schemaVersion": 41,
+  "refresh": "10s",
+  "panels": [
+    {"type":"stat","title":"Backend UP","id":1,"gridPos":{"h":6,"w":6,"x":0,"y":0},"targets":[{"expr":"up{job=\"autonomous-noc-backend\"}"}]},
+    {"type":"timeseries","title":"HTTP Request Rate","id":2,"gridPos":{"h":8,"w":9,"x":6,"y":0},"targets":[{"expr":"sum(rate(autonomous_noc_http_requests_total[5m]))"}]},
+    {"type":"timeseries","title":"p95 Response Time","id":3,"gridPos":{"h":8,"w":9,"x":15,"y":0},"targets":[{"expr":"histogram_quantile(0.95, sum by (le) (rate(autonomous_noc_http_request_duration_seconds_bucket[5m])))"}]},
+    {"type":"barchart","title":"Incidents by Severity","id":4,"gridPos":{"h":8,"w":12,"x":0,"y":8},"targets":[{"expr":"sum by (severity) (autonomous_noc_incidents_created_total)"}]},
+    {"type":"stat","title":"AI Analyses Total","id":5,"gridPos":{"h":8,"w":6,"x":12,"y":8},"targets":[{"expr":"sum(autonomous_noc_ai_analyses_total)"}]},
+    {"type":"table","title":"Latest AI Recommendations","id":6,"gridPos":{"h":8,"w":24,"x":0,"y":16},"targets":[{"expr":"autonomous_noc_last_ai_analysis","instant":true,"legendFormat":"{{affected_service}} | {{provider}} | {{risk}} | {{recommended_action}}"}]}
+  ]
+}

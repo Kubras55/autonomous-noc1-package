@@ -1,0 +1,90 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-autonomous_noc}
+      POSTGRES_USER: ${POSTGRES_USER:-noc}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+    volumes: [postgres-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U ${POSTGRES_USER:-noc} -d ${POSTGRES_DB:-autonomous_noc}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [noc-network]
+
+  backend:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-noc}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-autonomous_noc}
+      LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
+      LLM_MODEL: ${LLM_MODEL:-gpt-5-mini}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:4b}
+      AUTO_REMEDIATE: ${AUTO_REMEDIATE:-false}
+    ports:
+      - "8001:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [noc-network]
+
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama-data:/root/.ollama
+    ports: ["11434:11434"]
+    networks: [noc-network]
+    restart: unless-stopped
+
+  telemetry-agent:
+    profiles: ["lab"]
+    build: .
+    command: ["python", "-m", "app.telemetry_agent"]
+    environment:
+      BACKEND_URL: http://backend:8000
+      TELEMETRY_INTERVAL_SECONDS: ${TELEMETRY_INTERVAL_SECONDS:-10}
+      TELEMETRY_FAILURE_THRESHOLD: ${TELEMETRY_FAILURE_THRESHOLD:-3}
+      TELEMETRY_TARGETS: ${TELEMETRY_TARGETS:-r1-core=clab-autonomous-noc-r1-core,r2-edge=clab-autonomous-noc-r2-edge,r3-bng=clab-autonomous-noc-r3-bng,client-vlan100=clab-autonomous-noc-client-vlan100}
+    depends_on: [backend]
+    networks: [noc-network]
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+    ports: ["9090:9090"]
+    networks: [noc-network]
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    command: ["--config.file=/etc/alertmanager/alertmanager.yml"]
+    volumes:
+      - ./monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports: ["9093:9093"]
+    networks: [noc-network]
+
+  grafana:
+    image: grafana/grafana:12.1.0
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["3001:3000"]
+    networks: [noc-network]
+
+networks:
+  noc-network:
+    name: noc-network
+    driver: bridge
+
+volumes:
+  postgres-data:
+  ollama-data:
